@@ -14,19 +14,24 @@ concurrently under distinct configurations).
 import hashlib
 import json
 import os
+import signal
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from hermes_constants import get_hermes_home
 from typing import Any, Optional
 
 _GATEWAY_KIND = "hermes-gateway"
 _RUNTIME_STATUS_FILE = "gateway_state.json"
 _LOCKS_DIRNAME = "gateway-locks"
+_IS_WINDOWS = sys.platform == "win32"
+_UNSET = object()
 
 
 def _get_pid_path() -> Path:
     """Return the path to the gateway PID file, respecting HERMES_HOME."""
-    home = Path(os.getenv("HERMES_HOME", Path.home() / ".hermes"))
+    home = get_hermes_home()
     return home / "gateway.pid"
 
 
@@ -46,6 +51,33 @@ def _get_lock_dir() -> Path:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def terminate_pid(pid: int, *, force: bool = False) -> None:
+    """Terminate a PID with platform-appropriate force semantics.
+
+    POSIX uses SIGTERM/SIGKILL. Windows uses taskkill /T /F for true force-kill
+    because os.kill(..., SIGTERM) is not equivalent to a tree-killing hard stop.
+    """
+    if force and _IS_WINDOWS:
+        try:
+            result = subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except FileNotFoundError:
+            os.kill(pid, signal.SIGTERM)
+            return
+
+        if result.returncode != 0:
+            details = (result.stderr or result.stdout or "").strip()
+            raise OSError(details or f"taskkill failed for PID {pid}")
+        return
+
+    sig = signal.SIGTERM if not force else getattr(signal, "SIGKILL", signal.SIGTERM)
+    os.kill(pid, sig)
 
 
 def _scope_hash(identity: str) -> str:
@@ -127,6 +159,8 @@ def _build_runtime_status_record() -> dict[str, Any]:
     payload.update({
         "gateway_state": "starting",
         "exit_reason": None,
+        "restart_requested": False,
+        "active_agents": 0,
         "platforms": {},
         "updated_at": _utc_now_iso(),
     })
@@ -185,12 +219,14 @@ def write_pid_file() -> None:
 
 def write_runtime_status(
     *,
-    gateway_state: Optional[str] = None,
-    exit_reason: Optional[str] = None,
-    platform: Optional[str] = None,
-    platform_state: Optional[str] = None,
-    error_code: Optional[str] = None,
-    error_message: Optional[str] = None,
+    gateway_state: Any = _UNSET,
+    exit_reason: Any = _UNSET,
+    restart_requested: Any = _UNSET,
+    active_agents: Any = _UNSET,
+    platform: Any = _UNSET,
+    platform_state: Any = _UNSET,
+    error_code: Any = _UNSET,
+    error_message: Any = _UNSET,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
     path = _get_runtime_status_path()
@@ -201,18 +237,22 @@ def write_runtime_status(
     payload["start_time"] = _get_process_start_time(os.getpid())
     payload["updated_at"] = _utc_now_iso()
 
-    if gateway_state is not None:
+    if gateway_state is not _UNSET:
         payload["gateway_state"] = gateway_state
-    if exit_reason is not None:
+    if exit_reason is not _UNSET:
         payload["exit_reason"] = exit_reason
+    if restart_requested is not _UNSET:
+        payload["restart_requested"] = bool(restart_requested)
+    if active_agents is not _UNSET:
+        payload["active_agents"] = max(0, int(active_agents))
 
-    if platform is not None:
+    if platform is not _UNSET:
         platform_payload = payload["platforms"].get(platform, {})
-        if platform_state is not None:
+        if platform_state is not _UNSET:
             platform_payload["state"] = platform_state
-        if error_code is not None:
+        if error_code is not _UNSET:
             platform_payload["error_code"] = error_code
-        if error_message is not None:
+        if error_message is not _UNSET:
             platform_payload["error_message"] = error_message
         platform_payload["updated_at"] = _utc_now_iso()
         payload["platforms"][platform] = platform_payload
@@ -274,6 +314,21 @@ def acquire_scoped_lock(scope: str, identity: str, metadata: Optional[dict[str, 
                     and current_start != existing.get("start_time")
                 ):
                     stale = True
+                # Check if process is stopped (Ctrl+Z / SIGTSTP) — stopped
+                # processes still respond to os.kill(pid, 0) but are not
+                # actually running. Treat them as stale so --replace works.
+                if not stale:
+                    try:
+                        _proc_status = Path(f"/proc/{existing_pid}/status")
+                        if _proc_status.exists():
+                            for _line in _proc_status.read_text().splitlines():
+                                if _line.startswith("State:"):
+                                    _state = _line.split()[1]
+                                    if _state in ("T", "t"):  # stopped or tracing stop
+                                        stale = True
+                                    break
+                    except (OSError, PermissionError):
+                        pass
         if stale:
             try:
                 lock_path.unlink(missing_ok=True)
@@ -312,6 +367,25 @@ def release_scoped_lock(scope: str, identity: str) -> None:
         lock_path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def release_all_scoped_locks() -> int:
+    """Remove all scoped lock files in the lock directory.
+
+    Called during --replace to clean up stale locks left by stopped/killed
+    gateway processes that did not release their locks gracefully.
+    Returns the number of lock files removed.
+    """
+    lock_dir = _get_lock_dir()
+    removed = 0
+    if lock_dir.exists():
+        for lock_file in lock_dir.glob("*.lock"):
+            try:
+                lock_file.unlink(missing_ok=True)
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 
 def get_running_pid() -> Optional[int]:

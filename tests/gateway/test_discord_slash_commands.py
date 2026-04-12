@@ -62,6 +62,7 @@ def adapter():
         fetch_channel=AsyncMock(),
         user=SimpleNamespace(id=99999, name="HermesBot"),
     )
+    adapter._text_batch_delay_seconds = 0  # disable batching for tests
     return adapter
 
 
@@ -239,6 +240,42 @@ async def test_dispatch_thread_session_builds_thread_event(adapter):
     assert event.source.chat_type == "thread"
     assert event.source.thread_id == "555"
     assert "TestGuild" in event.source.chat_name
+
+
+# ------------------------------------------------------------------
+# _build_slash_event — preserve thread context for native slash commands
+# ------------------------------------------------------------------
+
+
+def test_build_slash_event_preserves_thread_context(adapter):
+    interaction = SimpleNamespace(
+        channel=_FakeThreadChannel(channel_id=555, name="Planning"),
+        channel_id=555,
+        user=SimpleNamespace(display_name="Jezza", id=42),
+    )
+
+    event = adapter._build_slash_event(interaction, "/status")
+
+    assert event.text == "/status"
+    assert event.source.chat_id == "555"
+    assert event.source.chat_type == "thread"
+    assert event.source.thread_id == "555"
+    assert "TestGuild" in event.source.chat_name
+
+
+def test_build_slash_event_uses_group_context_for_channels(adapter):
+    interaction = SimpleNamespace(
+        channel=_FakeTextChannel(channel_id=123, name="general"),
+        channel_id=123,
+        user=SimpleNamespace(display_name="Jezza", id=42),
+    )
+
+    event = adapter._build_slash_event(interaction, "/status")
+
+    assert event.source.chat_id == "123"
+    assert event.source.chat_type == "group"
+    assert event.source.thread_id is None
+    assert "TestGuild / #general" == event.source.chat_name
 
 
 # ------------------------------------------------------------------

@@ -33,8 +33,10 @@ Use any model you want — [Nous Portal](https://portal.nousresearch.com), [Open
 curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
 ```
 
-Works on Linux, macOS, and WSL2. The installer handles everything — Python, Node.js, dependencies, and the `hermes` command. No prerequisites except git.
+Works on Linux, macOS, WSL2, and Android via Termux. The installer handles the platform-specific setup for you.
 
+> **Android / Termux:** The tested manual path is documented in the [Termux guide](https://hermes-agent.nousresearch.com/docs/getting-started/termux). On Termux, Hermes installs a curated `.[termux]` extra because the full `.[all]` extra currently pulls Android-incompatible voice dependencies.
+>
 > **Windows:** Native Windows is not supported. Please install [WSL2](https://learn.microsoft.com/en-us/windows/wsl/install) and run the command above.
 
 After installation:
@@ -144,16 +146,14 @@ Quick start for contributors:
 ```bash
 git clone https://github.com/NousResearch/hermes-agent.git
 cd hermes-agent
-git submodule update --init mini-swe-agent   # required terminal backend
 curl -LsSf https://astral.sh/uv/install.sh | sh
-uv venv .venv --python 3.11
-source .venv/bin/activate
+uv venv venv --python 3.11
+source venv/bin/activate
 uv pip install -e ".[all,dev]"
-uv pip install -e "./mini-swe-agent"
 python -m pytest tests/ -q
 ```
 
-> **RL Training (optional):** To work on the RL/Tinker-Atropos integration, also run:
+> **RL Training (optional):** To work on the RL/Tinker-Atropos integration:
 > ```bash
 > git submodule update --init tinker-atropos
 > uv pip install -e "./tinker-atropos"

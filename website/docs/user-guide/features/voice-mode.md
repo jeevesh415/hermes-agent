@@ -36,19 +36,19 @@ The `~/.hermes/` directory and default `config.yaml` are created automatically t
 
 ```bash
 # CLI voice mode (microphone + audio playback)
-pip install hermes-agent[voice]
+pip install "hermes-agent[voice]"
 
 # Discord + Telegram messaging (includes discord.py[voice] for VC support)
-pip install hermes-agent[messaging]
+pip install "hermes-agent[messaging]"
 
 # Premium TTS (ElevenLabs)
-pip install hermes-agent[tts-premium]
+pip install "hermes-agent[tts-premium]"
 
 # Local TTS (NeuTTS, optional)
 python -m pip install -U neutts[all]
 
 # Everything at once
-pip install hermes-agent[all]
+pip install "hermes-agent[all]"
 ```
 
 | Extra | Packages | Required For |
@@ -395,7 +395,7 @@ stt:
 
 # Text-to-Speech
 tts:
-  provider: "edge"                 # "edge" (free) | "elevenlabs" | "openai" | "neutts"
+  provider: "edge"                 # "edge" (free) | "elevenlabs" | "openai" | "neutts" | "minimax"
   edge:
     voice: "en-US-AriaNeural"      # 322 voices, 74 languages
   elevenlabs:
@@ -404,6 +404,7 @@ tts:
   openai:
     model: "gpt-4o-mini-tts"
     voice: "alloy"                 # alloy, echo, fable, onyx, nova, shimmer
+    base_url: "https://api.openai.com/v1"  # optional: override for self-hosted or OpenAI-compatible endpoints
   neutts:
     ref_audio: ''
     ref_text: ''
